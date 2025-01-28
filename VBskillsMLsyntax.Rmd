@@ -1,0 +1,214 @@
+---
+title: "Machine lerning - Volleyboll skills"
+subtitle: "Hampus Nordholm | hampus.nordholm@live.se"
+author: "Randomforest and logistic regression"
+date: "2025-01-28"
+output:
+  pdf_document:
+    latex_engine: xelatex
+---
+
+## Libraries -- 
+
+```{r,warning=FALSE}
+library(tidyverse)
+library(tidymodels)
+library(correlationfunnel)
+library(vip)
+```
+
+
+## Reading data into R -- 
+
+```{r}
+
+vb_matches <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/main/data/2020/2020-05-19/vb_matches.csv', guess_max = 76000)
+```
+
+
+## Data inspection -- 
+
+
+```{r}
+
+vb_matches %>% glimpse()
+
+vb_matches %>% View()
+
+vb_matches %>% skim()
+
+```
+
+## Data wrangling and cleaning -- 
+
+```{r}
+
+vb_wl_tbl <- vb_matches %>% 
+  transmute(circuit,country,year,gender,
+            winner_attacks=w_p1_tot_attacks + w_p2_tot_attacks,
+            winner_kills=w_p1_tot_errors + w_p2_tot_errors,
+            winner_errors=w_p1_tot_errors + w_p2_tot_errors,
+            winner_hitpct=w_p1_tot_hitpct + w_p2_tot_hitpct,
+            winner_aces=w_p1_tot_aces + w_p1_tot_aces,
+            winner_serveerrors=w_p1_tot_serve_errors + w_p2_tot_serve_errors,
+            winner_blocks=w_p1_tot_blocks + w_p2_tot_blocks,
+            winner_digs=w_p1_tot_digs + w_p2_tot_digs,
+            looser_attacks=w_p1_tot_attacks + w_p2_tot_attacks,
+            looser_kills=l_p1_tot_errors + l_p2_tot_errors,
+            looser_errors=l_p1_tot_errors + l_p2_tot_errors,
+            looser_hitpct=l_p1_tot_hitpct + l_p2_tot_hitpct,
+            looser_aces=l_p1_tot_aces + l_p1_tot_aces,
+            looser_serveerrors=l_p1_tot_serve_errors + l_p2_tot_serve_errors,
+            looser_blocks=l_p1_tot_blocks + l_p2_tot_blocks,
+            looser_digs=l_p1_tot_digs + l_p2_tot_digs,
+            ) %>% 
+  na.omit()
+
+#Saving winners df -- 
+
+wb_winners <- vb_wl_tbl %>%
+  select(circuit, country, year, gender, winner_attacks:winner_digs) %>%
+  rename_with(~ str_replace_all(., "^winner_", "")) %>% 
+  mutate(wl="winner",
+         gender=ifelse(gender=="M","Male","Female"))
+
+#Saving loosers df -- 
+
+wb_loosers <- vb_wl_tbl %>%
+  select(circuit, country, year, gender, looser_attacks:looser_digs) %>%
+  rename_with(~ str_replace_all(., "^looser_", "")) %>% 
+   mutate(wl="looser",
+         gender=ifelse(gender=="M","Male","Female"))
+
+#Combind both dfs --
+
+wb_tbl <- bind_rows(wb_winners,wb_loosers) %>% 
+  mutate_if(is.character,as.factor)
+
+wb_tbl
+
+
+```
+
+## Exploratory data analysis --
+
+```{r}
+
+wb_tbl %>% 
+  group_by(gender) %>% 
+  summarize(mean=mean(hitpct),
+            median=median(hitpct),
+            sd=sd(hitpct))
+
+
+wb_tbl %>% 
+  binarize() %>% 
+  correlate(wl__winner) %>% 
+  plot_correlation_funnel()
+
+wb_tbl %>% 
+  ggplot(aes(hitpct,fill=wl))+
+  geom_density(alpha=0.5)
+
+
+```
+
+## Pre processing -- 
+
+```{r}
+model_tbl <- wb_tbl %>% 
+  select(attacks:digs,wl)
+
+set.seed(123)
+log_split <- initial_split(model_tbl,strata=wl)
+wb_train <- training(log_split)
+wb_test <- testing(log_split)
+
+ml_folds <- vfold_cv(wb_train,v=10)
+
+log_rec <- recipe(wl~.,data=wb_train) %>% 
+  step_normalize(all_numeric_predictors())
+
+
+```
+
+
+## Logistic regression  --
+```{r}
+
+
+log_spec <- logistic_reg() %>% 
+  set_engine("glm") %>% 
+  set_mode("classification")
+
+log_wf <- workflow() %>% 
+  add_recipe(log_rec) %>% 
+  add_model(log_spec)
+
+log_cv_train<-log_wf %>% 
+  fit_resamples(resamples=ml_folds)
+
+logistic_cv_ev <- log_cv_train %>% 
+  collect_metrics()
+
+
+
+```
+
+## Random forest ---
+
+
+```{r}
+
+rf_spec <- rand_forest(trees=500) %>% 
+  set_engine("ranger",importance="impurity") %>% 
+  set_mode("classification")
+
+rf_wf <- workflow() %>% 
+  add_recipe(log_rec) %>% 
+  add_model(rf_spec)
+
+rf_cv_train <- rf_wf %>% 
+  fit_resamples(resamples=ml_folds)
+
+randomforest_cv_ev <- rf_cv_train %>% 
+  collect_metrics()
+
+```
+
+## CV results -- 
+
+```{r}
+
+logistic_cv_ev
+
+randomforest_cv_ev
+
+```
+
+## Final randomforest model evalution -- 
+
+
+```{r}
+
+rf_final <- last_fit(rf_wf,log_split)
+
+rf_final %>% collect_metrics()
+
+rf_final %>% collect_predictions() %>% 
+  conf_mat(truth=wl,estimate=.pred_class)
+
+rf_final %>% collect_predictions() %>% 
+  roc_curve(wl,.pred_looser) %>% 
+  autoplot()
+
+rf_final %>% extract_fit_parsnip() %>% 
+  vip()+
+  geom_bar(stat="identity",aes(fill=Importance))
+
+```
+
+
+
+
+
