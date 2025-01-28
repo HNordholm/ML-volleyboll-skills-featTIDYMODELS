@@ -1,5 +1,5 @@
 ---
-title: "Machine lerning - Volleyboll skills"
+title: "Machine laerning - Volleyboll skills"
 subtitle: "Hampus Nordholm | hampus.nordholm@live.se"
 author: "Randomforest and logistic regression"
 date: "2025-01-28"
